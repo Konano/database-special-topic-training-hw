@@ -69,7 +69,8 @@ void run(int tid) {
 				}
 				if (get_lock == false) wr_lock.lock();
 				get_lock = true;
-				row[row_id][row_tot[row_id]++] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
+				row[row_id][row_tot[row_id]] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
+				row_tot[row_id] += 1;
 				// clock_gettime(CLOCK_REALTIME, &now);
 				// debug << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << "," << row_tot[row_id] << "," << idx << "x" << timestamp << endl;
 				// fout << row_tot[row_id]-1 << endl;

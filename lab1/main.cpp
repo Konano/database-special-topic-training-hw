@@ -9,18 +9,24 @@ using namespace std;
 
 int thread_num;
 atomic_int txn_num(0);
-map<string,int> storage;
-pair<int,int> row[10][1000000];
+string type[10];
+pair<int,int> row[10][50000];
+// bool row_tmp[10][10];
+// pair<int,int> row_tmp_val[10][10];
 int row_num = 0;
 int row_tot[10];
-mutex wr_lock;
-int rv[10], _rv[10][1000000]; 
+// mutex wr_lock;
+int rv[10];
+// int _rv[10][50000];
 mutex rv_lock;
 thread td[10];
 struct timespec st;
 
 
 void run(int tid) {
+	bool row_tmp[10] = {false};
+	pair<int,int> row_tmp_val[10] = {make_pair(0,0)};
+	int _rv[50000] = {0};
 	ifstream fin;
 	ofstream fout;
 	// ofstream debug;
@@ -29,12 +35,12 @@ void run(int tid) {
 	// debug.open(("debug_"s + std::to_string(tid) + ".csv"s).c_str(), ios::out);
 	fout << "transaction_id,type,time,value" << endl;
 	struct timespec now;
-	string command, name, _name, op; int txn_id, val; bool get_lock = false;
+	string command, name, _name, op; int txn_id, val;
 	while (fin >> command >> txn_id) {
 		if (command != "BEGIN"s) break;
 		rv_lock.lock();
 		int timestamp = ++txn_num;
-		for (uint8_t i = 1; i <= thread_num; i++) if (rv[i]) _rv[tid][rv[i]] = timestamp;
+		for (uint8_t i = 1; i <= thread_num; i++) if (rv[i]) _rv[rv[i]] = timestamp;
 		rv[tid] = timestamp;
 		clock_gettime(CLOCK_REALTIME, &now);
 		fout << txn_id << ",BEGIN," << cost << "," << endl;
@@ -43,34 +49,49 @@ void run(int tid) {
 		while (command != "COMMIT"s) {
 			if (command == "READ"s) {
 				fin >> name;
-				int row_id = storage[name];
-				int idx = row_tot[row_id];
-				while (true) {
-					idx -= 1;
-					if (row[row_id][idx].second > timestamp) continue;
-					if (_rv[tid][row[row_id][idx].second] == timestamp) continue;
-					// debug << _rv[tid][row[row_id][idx].second] << "," << timestamp << "," << row[row_id][idx].second << endl;
-					break;
+				int row_id = 0; while (type[row_id] != name) row_id++;
+				if (row_tmp[row_id]) {
+					val = row_tmp_val[row_id].first;
+				} else {
+					int idx = row_tot[row_id];
+					while (true) {
+						idx -= 1;
+						if (row[row_id][idx].second > timestamp) continue;
+						if (_rv[row[row_id][idx].second] == timestamp) continue;
+						// debug << _rv[row[row_id][idx].second] << "," << timestamp << "," << row[row_id][idx].second << endl;
+						break;
+					}
+					val = row[row_id][idx].first;
 				}
+				
 				clock_gettime(CLOCK_REALTIME, &now);
-				fout << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << endl;
+				fout << txn_id << "," << name << "," << cost << "," << val << endl;
 				// debug << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << "," << row[row_id][idx].second << "," << idx << "," << row_tot[row_id] << endl;
 				// fout << idx << endl;
 			}
 			if (command == "SET"s) {
 				fin >> _name >> name >> op >> val; _name = _name.substr(0,_name.length()-1); 
-				int row_id = storage[name];
-				int idx = row_tot[row_id];
-				while (true) {
-					idx -= 1;
-					if (row[row_id][idx].second > timestamp) continue;
-					if (_rv[tid][row[row_id][idx].second] == timestamp) continue;
-					break;
+				int row_id = 0; while (type[row_id] != name) row_id++;
+				if (row_tmp[row_id]) {
+					row_tmp_val[row_id].first += val * (op == "+"s ? +1 : -1);
+				} else {
+					int idx = row_tot[row_id];
+					while (true) {
+						idx -= 1;
+						if (row[row_id][idx].second > timestamp) continue;
+						if (_rv[row[row_id][idx].second] == timestamp) continue;
+						break;
+					}
+					row_tmp_val[row_id] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
+					row_tmp[row_id] = true;
 				}
-				if (get_lock == false) wr_lock.lock();
-				get_lock = true;
-				row[row_id][row_tot[row_id]] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
-				row_tot[row_id] += 1;
+				
+				// if (get_lock == false) wr_lock.lock();
+				// get_lock = true;
+				// if (row_tmp[tid][row_id]) {
+				// 	row_tmp_val[tid][row_id] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
+				// }
+				
 				// clock_gettime(CLOCK_REALTIME, &now);
 				// debug << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << "," << row_tot[row_id] << "," << idx << "x" << timestamp << endl;
 				// fout << row_tot[row_id]-1 << endl;
@@ -80,8 +101,11 @@ void run(int tid) {
 		}
 		rv_lock.lock();
 		rv[tid] = 0;
-		if (get_lock) wr_lock.unlock();
-		get_lock = false;
+		for (uint8_t i = 0; i < row_num; i++) if (row_tmp[i]) {
+			row[i][row_tot[i]] = row_tmp_val[i];
+			row_tot[i] += 1;
+			row_tmp[i] = false;
+		}
 		clock_gettime(CLOCK_REALTIME, &now);
 		fout << txn_id << ",END," << cost << "," << endl;
 		rv_lock.unlock();
@@ -97,7 +121,7 @@ inline void prepare() {
 	while (pstream >> command >> name >> val) {
 		row_tot[row_num] = 0;
 		row[row_num][row_tot[row_num]++] = make_pair(val, 0);
-		storage[name] = row_num++;
+		type[row_num++] = name;
 	}
 	pstream.close();
 }
@@ -112,6 +136,7 @@ int main(int argc, const char *argv[]) {
 	clock_gettime(CLOCK_REALTIME, &st);
 	for (uint8_t i = 1; i <= thread_num; i++) {
 		td[i] = thread(run, i);
+		// td[i].join();
 	}
 	for (uint8_t i = 1; i <= thread_num; i++) {
 		td[i].join();

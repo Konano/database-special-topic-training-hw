@@ -4,6 +4,8 @@ import json
 import sqlparse
 from sqlparse.sql import Token
 from decimal import Decimal, getcontext
+import fnmatch
+from math import log10, log
 getcontext().prec = 100
 
 def isNotWhitespace(x):
@@ -15,10 +17,12 @@ def removeSpace(x):
     return list(filter(isNotWhitespace, x))
 
 SAMPLE_SIZE = 100000
+RELATE_FUNC = True
 
 class Column:
 
-    def __init__(self, name, type):
+    def __init__(self, name, type, tb_name):
+        self.tb_name = tb_name
         self.name = name
         self.type = type
         self.size = 0
@@ -50,8 +54,11 @@ class Column:
         self.size = data['size']
         self.none_num = data['none_num']
         self.counter = data['counter']
-        self.sample = data['sample']
-        self.sample.sort()
+        if self.counter != {}:
+            self.sample = []
+        else:
+            self.sample = data['sample']
+            self.sample.sort()
         self.min = data['min']
         self.max = data['max']
 
@@ -78,7 +85,6 @@ class Column:
             if self.max == None or val > self.max:
                 self.max = val 
 
-
 class Table:
 
     def __init__(self, parsed, impo=False):
@@ -87,7 +93,7 @@ class Table:
         cols = parsed[6]
         for idx, token in enumerate(cols):
             if token.ttype == None and token.value[-1] != ')':
-                self.cols += [Column(token.value.split(' ')[-1], cols[idx+2].value)]
+                self.cols += [Column(token.value.split(' ')[-1], cols[idx+2].value, self.name)]
         self.size = 0
         if impo:
             for x in self.cols:
@@ -114,6 +120,113 @@ class Table:
         for x in self.cols:
             self.cols_dict[x.name] = x
 
+class Relate:
+    
+    def __init__(self, tbl):
+        
+        with open(f'sample_relate/{tbl}.json', 'r') as f:
+            data = json.load(f)
+        self.tbl = tbl
+        self.col0 = data['col0']
+        self.col1 = data['col1']
+        self.total = int(data['total'])
+        self.csize = data['csize']
+        self.count = data['count']
+
+        self._count = {}
+        for x in self.count.keys():
+            if type(self.count[x]) == list:
+                self.count[x] = [int(x) for x in self.count[x]]
+                self.count[x].sort()
+                self._count[x] = {}
+                for y in self.count[x]:
+                    if y not in self._count[x]:
+                        self._count[x][y] = 1
+                    else:
+                        self._count[x][y] += 1
+            else:
+                self._count[x] = [(int(y[0]), y[1]) for y in self.count[x].items()]
+                self._count[x].sort()
+                cnt = 0
+                for i in range(len(self._count[x])):
+                    cnt, self._count[x][i] = cnt + self._count[x][i][1], (self._count[x][i][0], cnt)
+                self._count[x].append((999999999999, cnt))
+                
+    
+    def cal(self, a, b):
+
+        # print(a.L, a.R, b.L, b.R)
+        poss = Decimal(1) / a.p
+
+        if a.L[1] == self.col1 and b.L[1] == self.col0:
+            a, b = b, a
+        if a.L[1] != self.col0 or b.L[1] != self.col1:
+            return b.poss()
+
+        cnt = 0
+        at = a.type if a.type != '=' else '=='
+        # print(b.type)
+        bt = b.type if b.type != '=' else '=='
+        for x in self.count.keys():
+            if eval(f'{x} {at} {a.R}'):
+                if type(self.count[x]) == list:
+                    _cnt = 0
+                    if bt == '==':
+                        _cnt = (self._count[x][b.R] if b.R in self._count[x] else 0)
+                    elif bt == '!=':
+                        _cnt = len(self.count[x]) - (self._count[x][b.R] if b.R in self._count[x] else 0)
+                    elif bt == '<':
+                        _cnt = findLs(self.count[x], b.R)
+                    elif bt == '<=':
+                        _cnt = len(self.count[x]) - findGt(self.count[x], b.R)
+                    elif bt == '>':
+                        _cnt = findGt(self.count[x], b.R)
+                    elif bt == '>=':
+                        _cnt = len(self.count[x]) - findLs(self.count[x], b.R)
+                    else:
+                        raise
+
+                    # __cnt = 0
+                    # for y in self.count[x]:
+                    #     if eval(f'{y} {bt} {b.R}'):
+                    #         __cnt += 1
+                    # assert(__cnt == _cnt)
+                    cnt += int(_cnt / len(self.count[x]) * self.csize[x])
+                else:
+                    _cnt = 0
+                    if bt == '==':
+                        _cnt = (self.count[x][str(b.R)] if str(b.R) in self.count[x] else 0)
+                    elif bt == '!=':
+                        _cnt = self._count[x][-1][1] - (self.count[x][str(b.R)] if str(b.R) in self.count[x] else 0)
+                    elif bt == '<':
+                        i = findLs(self._count[x], (b.R, 0))
+                        _cnt = self._count[x][i][1]
+                    elif bt == '<=':
+                        i = findLs(self._count[x], (b.R, 0))
+                        _cnt = self._count[x][i+(self._count[x][i][0]==b.R)][1]
+                    elif bt == '>':
+                        i = findLs(self._count[x], (b.R, 0))
+                        _cnt = self._count[x][-1][1] - self._count[x][i+(self._count[x][i][0]==b.R)][1]
+                    elif bt == '>=':
+                        i = findLs(self._count[x], (b.R, 0))
+                        _cnt = self._count[x][-1][1] - self._count[x][i][1]
+                    else:
+                        raise
+
+                    # __cnt = 0
+                    # for y in self.count[x].keys():
+                    #     if eval(f'{y} {bt} {b.R}'):
+                    #         __cnt += self.count[x][y]
+                    # print(bt, x,  _cnt)
+                    # assert(__cnt == _cnt)
+
+                    cnt += _cnt
+
+        # print(cnt, self.total)
+        if cnt == 0 and type(self.csize) == dict and self.tbl == 'cast_info':
+            cnt = 10
+        return poss * Decimal(cnt) / self.total
+
 class Database:
     
     def __init__(self, filename, impo=False):
@@ -125,6 +238,10 @@ class Database:
             if len(prased):
                 tb = Table(prased[0], impo)
                 self.tables[tb.name] = tb
+
+        self.relate = {}
+        for x in ['cast_info', 'title', 'movie_companies']:
+            self.relate[x] = Relate(x)
 
 def findLs(L, val):
     num, pow2 = 0, 1
@@ -160,6 +277,7 @@ class Where: # L op R
 
     def dealSingle(self, prased, fr):
         if prased[0].ttype == None:
+            self._R = (prased[0].get_parent_name(), prased[0].get_name())
             self.R = (fr[prased[0].get_parent_name()], prased[0].get_name())
         elif str(prased[0].ttype) == 'Token.Literal.String.Single':
             self.R = prased[0].value[1:-1]
@@ -198,6 +316,7 @@ class Where: # L op R
     def __init__(self, prased, fr):
         if len(prased) == 1:
             prased = removeSpace(prased[0])
+        self._L = (prased[0].get_parent_name(), prased[0].get_name())
         self.L = (fr[prased[0].get_parent_name()], prased[0].get_name())
         # print(self.L)
         self.type = prased[1].value
@@ -213,11 +332,11 @@ class Where: # L op R
                 for x in col.sample:
                     eq += (1 if x == self.R else 0)
                 if eq > 0:
-                    return Decimal(eq) / db.tables[self.L[0]].size
+                    return Decimal(eq) / len(col.sample)
                 else:
-                    return Decimal(eq) / col.size
+                    return Decimal(1) / col.size # 
         else:
-            if self.L in cal_wr and self.R in cal_wr:
+            if self._L in cal_wr and self._R in cal_wr:
                 return Decimal(1)
 
             col0 = db.tables[self.L[0]].cols_dict[self.L[1]]
@@ -239,20 +358,18 @@ class Where: # L op R
                     else:
                         i1 += 1
                 poss = Decimal(num) / Decimal(db.tables[self.L[0]].size) / Decimal(db.tables[self.R[0]].size)
+            elif col0.size == db.tables[self.L[0]].size:
+                poss = Decimal(1) / col0.size
+            elif col1.size == db.tables[self.R[0]].size:
+                poss = Decimal(1) / col1.size
             elif col0.counter != {} or col1.counter != {}:
                 # print('working 5')
                 poss = Decimal(1) # TODO
             else:
                 poss = Decimal(1) - self.pLs() - self.pGt()
             
-            if self.L in cal_wr:
-                poss *= Decimal(db.tables[self.L[0]].size)
-            else:
-                cal_wr.add(self.L)
-            if self.R in cal_wr:
-                poss *= Decimal(db.tables[self.R[0]].size)
-            else:
-                cal_wr.add(self.R)
+            cal_wr.add(self._L)
+            cal_wr.add(self._R)
             
             return poss
     
@@ -381,8 +498,22 @@ class Where: # L op R
     def pGe(self):
         return Decimal(1) - self.pLs()
     
-    def pIn(self): # TODO Sample
-        return Decimal(1)
+    def pIn(self):
+        col = db.tables[self.L[0]].cols_dict[self.L[1]]
+        if col.counter != {}:
+            cnt = 0
+            for x in self.R:
+                if x in col.counter:
+                    cnt += col.counter[x]
+            return Decimal(cnt) / db.tables[self.L[0]].size
+        else:
+            cnt = 0
+            for x in col.sample:
+                cnt += (1 if x in self.R else 0)
+            if cnt > 0:
+                return Decimal(cnt) / len(col.sample)
+            else:
+                return Decimal(len(self.R)) / col.size
     
     def pBw(self):
         _R = self.R
@@ -394,7 +525,21 @@ class Where: # L op R
         return poss
     
     def pLk(self): # TODO
-        return Decimal(1)
+        col = db.tables[self.L[0]].cols_dict[self.L[1]]
+        if col.counter != {}:
+            cnt = 0
+            for x in col.counter.keys():
+                if fnmatch.fnmatch(x, self.R.replace('%', '*')):
+                    cnt += col.counter[x]
+            return Decimal(cnt) / db.tables[self.L[0]].size
+        else:
+            cnt = 0
+            for x in col.sample:
+                cnt += (1 if fnmatch.fnmatch(x, self.R.replace('%', '*')) else 0)
+            if cnt > 0:
+                return Decimal(cnt) / len(col.sample)
+            else:
+                return Decimal(len(self.R)) / col.size
     
     def pNl(self):
         return Decimal(1) - self.pLk()
@@ -413,56 +558,72 @@ class Where: # L op R
     }
 
     def poss(self):
-        poss = self.p_dict.get(self.type)(self)
-        # print(poss)
-        return poss
+        self.p = self.p_dict.get(self.type)(self)
+        return self.p
 
-def run(filename):
-    with open(filename, "r") as f:
+def run(level):
+    with open(f'input/{level}.sql', "r") as f:
         data = f.read()
-    for statement in sqlparse.split(data):
-        prased = sqlparse.parse(statement)
-        if len(prased) == 0:
-            continue
-        fr = {}
-        prased = removeSpace(prased[0])
-        from_idx = 0
-        while prased[from_idx].value != 'FROM':
-            from_idx += 1
-        for token in prased[from_idx+1:-1]:
-            if token.get_name() != None:
-                fr[token.get_name().lower()] = token.get_real_name()
-            else:
-                for _token in removeSpace(token):
-                    if _token.ttype == None:
-                        fr[_token.get_name().lower()] = _token.get_real_name()
+    # test = [15]
+    # stm = sqlparse.split(data)
+    # for _id in test:
+    #     statement = stm[_id-1]
+    with open(f'output/{level}.txt', "w") as f:
+        for statement in sqlparse.split(data):
+            prased = sqlparse.parse(statement)
+            if len(prased) == 0:
+                continue
+            fr = {}
+            prased = removeSpace(prased[0])
+            from_idx = 0
+            while prased[from_idx].value != 'FROM':
+                from_idx += 1
+            for token in prased[from_idx+1:-1]:
+                if token.get_name() != None:
+                    fr[token.get_name().lower()] = token.get_real_name()
+                else:
+                    for _token in removeSpace(token):
+                        if _token.ttype == None:
+                            fr[_token.get_name().lower()] = _token.get_real_name()
 
-        line_num = 1
-        for _, val in fr.items():
-            line_num *= db.tables[val].size
-        print(line_num)
+            line_num = 1
+            for _, val in fr.items():
+                line_num *= db.tables[val].size
+            # print(line_num)
 
-        wr = []
-        lb = 0
-        where = removeSpace(prased[-1])
-        for idx, clause in enumerate(where):
-            if (clause.value == 'AND' and where[idx+1].ttype == None) or (str(clause.ttype) == 'Token.Punctuation'):
-                wr += [Where(where[lb+1:idx], fr)]
-                lb = idx
+            wr = []
+            lb = 0
+            where = removeSpace(prased[-1])
+            for idx, clause in enumerate(where):
+                if (clause.value == 'AND' and where[idx+1].ttype == None) or (str(clause.ttype) == 'Token.Punctuation'):
+                    wr += [Where(where[lb+1:idx], fr)]
+                    lb = idx
 
-        poss = Decimal(1)
-        global cal_wr
-        cal_wr = set([])
-        for w in wr:
-            poss *= w.poss()
-        print(int(poss * line_num))
+            poss = Decimal(1)
+            global cal_wr
+            cal_wr = set([])
+            for idx, w in enumerate(wr):
+                if RELATE_FUNC and idx > 0 and wr[idx-1].L[0] == w.L[0] and type(w.R) != tuple and type(wr[idx-1].R) != tuple and w.L[0] in db.relate:
+                    _p = db.relate[w.L[0]].cal(wr[idx-1], w)
+                    # print('*', _p)
+                else:
+                    _p = w.poss()
+                    # print(_p)
+                poss *= _p
+            if RELATE_FUNC == False and int(poss * line_num) == 0:
+                while int(poss * line_num) == 0:
+                    poss *= len(wr) ** 2
+                poss *= len(wr)
+            print(int(poss * line_num), file=f)
+    print(f'{level} completed.')
 
 
 # db = Database("imdb/schematext.sql")
 db = Database("imdb/schematext.sql", True)
 
 if __name__ == "__main__":
-    pass
-    # run('input/easy.sql')
-    run('input/middle.sql')
-    # run('input/hard.sql')
+    print('init completed. start.')
+    run('easy')
+    run('middle')
+    RELATE_FUNC = False
+    run('hard')

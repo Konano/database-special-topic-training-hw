@@ -183,8 +183,6 @@ class Relate:
                         _cnt = findGt(self.count[x], b.R)
                     elif bt == '>=':
                         _cnt = len(self.count[x]) - findLs(self.count[x], b.R)
-                    else:
-                        raise
 
                     # __cnt = 0
                     # for y in self.count[x]:
@@ -210,8 +208,6 @@ class Relate:
                     elif bt == '>=':
                         i = findLs(self._count[x], (b.R, 0))
                         _cnt = self._count[x][-1][1] - self._count[x][i][1]
-                    else:
-                        raise
 
                     # __cnt = 0
                     # for y in self.count[x].keys():
@@ -524,7 +520,7 @@ class Where: # L op R
         poss -= self.pGt()
         return poss
     
-    def pLk(self): # TODO
+    def pLk(self):
         col = db.tables[self.L[0]].cols_dict[self.L[1]]
         if col.counter != {}:
             cnt = 0
@@ -620,9 +616,11 @@ def run(level):
 
 # db = Database("imdb/schematext.sql")
 db = Database("imdb/schematext.sql", True)
+print('init completed.')
+
 
 if __name__ == "__main__":
-    print('init completed. start.')
+    print('start.')
     run('easy')
     run('middle')
     RELATE_FUNC = False

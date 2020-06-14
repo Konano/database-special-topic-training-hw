@@ -15,13 +15,9 @@ int thread_num;
 atomic_int txn_num(0);
 string type[10];
 pair<int,int> row[10][50000];
-// bool row_tmp[10][10];
-// pair<int,int> row_tmp_val[10][10];
 int row_num = 0;
 int row_tot[10];
-// mutex wr_lock;
 int rv[10];
-// int _rv[10][50000];
 mutex rv_lock;
 thread td[10];
 struct timespec st;
@@ -32,12 +28,10 @@ ofstream fout[10];
 long long pretime = 0;
 
 
-void run(int tid) {
+void run(int tid) {  // task thread
 	bool row_tmp[10] = {false};
 	pair<int,int> row_tmp_val[10] = {make_pair(0,0)};
 	int _rv[50000] = {0};
-	// ofstream debug;
-	// debug.open(("debug_"s + std::to_string(tid) + ".csv"s).c_str(), ios::out);
 	if (pretime == 0) fout[tid] << "transaction_id,type,time,value" << endl;
 	struct timespec now;
 	string command, name, _name, op; int txn_id, val;
@@ -48,7 +42,7 @@ void run(int tid) {
 			continue;
 		}
 		if (command != "BEGIN"s) break;
-		rv_lock.lock();
+		rv_lock.lock(); // fetch timestamp
 		int timestamp = ++txn_num;
 		for (uint8_t i = 1; i <= thread_num; i++) if (rv[i]) _rv[rv[i]] = timestamp;
 		rv[tid] = timestamp;
@@ -68,7 +62,6 @@ void run(int tid) {
 						idx -= 1;
 						if (row[row_id][idx].second > timestamp) continue;
 						if (_rv[row[row_id][idx].second] == timestamp) continue;
-						// debug << _rv[row[row_id][idx].second] << "," << timestamp << "," << row[row_id][idx].second << endl;
 						break;
 					}
 					val = row[row_id][idx].first;
@@ -76,8 +69,6 @@ void run(int tid) {
 				
 				clock_gettime(CLOCK_REALTIME, &now);
 				fout[tid] << txn_id << "," << name << "," << cost << "," << val << endl;
-				// debug << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << "," << row[row_id][idx].second << "," << idx << "," << row_tot[row_id] << endl;
-				// fout[tid] << idx << endl;
 			}
 			if (command == "SET"s) {
 				fin[tid] >> _name >> name >> op >> val; _name = _name.substr(0,_name.length()-1); 
@@ -95,21 +86,10 @@ void run(int tid) {
 					row_tmp_val[row_id] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
 					row_tmp[row_id] = true;
 				}
-				
-				// if (get_lock == false) wr_lock.lock();
-				// get_lock = true;
-				// if (row_tmp[tid][row_id]) {
-				// 	row_tmp_val[tid][row_id] = make_pair(row[row_id][idx].first + val * (op == "+"s ? +1 : -1), timestamp);
-				// }
-				
-				// clock_gettime(CLOCK_REALTIME, &now);
-				// debug << txn_id << "," << name << "," << cost << "," << row[row_id][idx].first << "," << row_tot[row_id] << "," << idx << "x" << timestamp << endl;
-				// fout[tid] << row_tot[row_id]-1 << endl;
-				// wr_lock[row_id].unlock();
 			}
 			fin[tid] >> command;
 		}
-		rv_lock.lock();
+		rv_lock.lock(); // commit data
 		rv[tid] = 0;
 		fwrite(&txn_id, sizeof(int), 1, redoLog);
 		for (uint8_t i = 0; i < row_num; i++) if (row_tmp[i]) {
@@ -130,9 +110,9 @@ void run(int tid) {
 	fout[tid].close();
 }
 
-inline void prepare() {
+inline void prepare() { // data prepare
 	ifstream pstream;
-	pstream.open("debug/data_prepare.txt", ios::in);
+	pstream.open("data_prepare.txt", ios::in);
 	string command, name; int val;
 	while (pstream >> command >> name >> val) {
 		row_tot[row_num] = 0;
@@ -142,8 +122,8 @@ inline void prepare() {
 	pstream.close();
 }
 
-inline void recover() {
-	FILE *pFile = fopen("debug/redo.log", "rb");
+inline void recover() { // recover prepare
+	FILE *pFile = fopen("redo.log", "rb");
 	int total_bytes, total_redo = 0, txn_id;
 	if (pFile != NULL) {
 		struct timespec st, ed;
@@ -167,11 +147,11 @@ inline void recover() {
 			finished[txn_id] = true;
 		}
 		fclose(pFile);
-		redoLog = fopen("debug/redo.log", "ab");
+		redoLog = fopen("redo.log", "ab");
 		fseek(redoLog, total_redo * (sizeof(int) * (row_num + 1)), SEEK_SET);
 
 		for (uint8_t i = 1; i <= thread_num; i++) {
-			fin[i].open(("debug/output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::in);
+			fin[i].open(("output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::in);
 			string line;
 			getline(fin[i], line);
 			int remain = fin[i].tellg(), first, second, third;
@@ -187,17 +167,17 @@ inline void recover() {
 				}
 			}
 			fin[i].close();
-			fin[i].open(("debug/thread_"s + std::to_string(i) + ".txt"s).c_str(), ios::in);
-			fout[i].open(("debug/output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::ate | ios::in);
+			fin[i].open(("thread_"s + std::to_string(i) + ".txt"s).c_str(), ios::in);
+			fout[i].open(("output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::ate | ios::in);
 			fout[i].seekp(remain);
 		}
 		clock_gettime(CLOCK_REALTIME, &ed);
 		printf("Cost: %.3lfs\n", (ed.tv_sec-st.tv_sec)+(ed.tv_nsec-st.tv_nsec)/1000000000.0);
 	} else {
-		redoLog = fopen("debug/redo.log", "wb");
+		redoLog = fopen("redo.log", "wb");
 		for (uint8_t i = 1; i <= thread_num; i++) {
-			fin[i].open(("debug/thread_"s + std::to_string(i) + ".txt"s).c_str(), ios::in);
-			fout[i].open(("debug/output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::out);
+			fin[i].open(("thread_"s + std::to_string(i) + ".txt"s).c_str(), ios::in);
+			fout[i].open(("output_thread_"s + std::to_string(i) + ".csv"s).c_str(), ios::out);
 		}
 	}
 	
@@ -215,12 +195,11 @@ int main(int argc, const char *argv[]) {
 	clock_gettime(CLOCK_REALTIME, &st);
 	for (uint8_t i = 1; i <= thread_num; i++) {
 		td[i] = thread(run, i);
-		// run(i);
 	}
 	for (uint8_t i = 1; i <= thread_num; i++) {
 		td[i].join();
 	}
-	remove("debug/redo.log");
+	remove("redo.log");
 	puts("Complete!");
 	return 0;
 }

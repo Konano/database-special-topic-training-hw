@@ -6,6 +6,7 @@ from sqlparse.sql import Token
 from decimal import Decimal, getcontext
 import fnmatch
 from math import log10, log
+import time
 getcontext().prec = 100
 
 def isNotWhitespace(x):
@@ -560,6 +561,7 @@ class Where: # L op R
 def run(level):
     with open(f'input/{level}.sql', "r") as f:
         data = f.read()
+    start = time.clock()
     # test = [15]
     # stm = sqlparse.split(data)
     # for _id in test:
@@ -611,7 +613,8 @@ def run(level):
                     poss *= len(wr) ** 2
                 poss *= len(wr)
             print(int(poss * line_num), file=f)
-    print(f'{level} completed.')
+    end = time.clock()
+    print(f'{level} completed.', end-start, 's')
 
 
 # db = Database("imdb/schematext.sql")
